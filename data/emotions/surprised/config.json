@@ -1,0 +1,7 @@
+{
+  "loop": false,
+  "frames": [
+    {"file": "frame_00.rgb565", "duration": 300},
+    {"file": "frame_01.rgb565", "duration": 500}
+  ]
+}

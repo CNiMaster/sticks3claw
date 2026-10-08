@@ -1,0 +1,57 @@
+# ===== PlatformIO =====
+.pio/
+.pioenvs/
+.piolibdeps/
+# 编译产物
+firmware.bin
+firmware.elf
+firmware.map
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== 本地虚拟环境 =====
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# ===== Syncthing（本地同步目录状态，非源码） =====
+.stfolder-*/
+.stignore
+.stversions/
+.sync/
+
+# ===== 代码图索引（本地生成） =====
+.codegraph/
+.claude/
+
+# ===== 🔐 隐私配置（绝不提交）=====
+# 真实 WiFi 密码、火山引擎 Token、AI API Key、MQTT 地址都在这里
+env/secrets.h
+# 兜底：任何路径下的 secrets.h 都排除，防止误建在别处
+secrets.h
+!env/secrets.example.h
+!**/secrets.h.example
+
+# ===== 证书与私钥 =====
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.der
+
+# ===== 抓包与调试产物 =====
+*.pcap
+*.pcapng
+core
+core.*
