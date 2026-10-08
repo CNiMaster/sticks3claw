@@ -95,8 +95,13 @@ String AIClient::chatWithRole(const char* systemPrompt, const char* apiUrl,
 }
 
 bool AIClient::httpPost(const char* url, const char* body, const char* authHeader, String& response) {
-    WiFiClientSecure client;
-    client.setInsecure();
+    // 按 URL 协议选择传输层：局域网里的 OpenClaw Gateway 是明文 http://xxx:18789，
+    // 用 WiFiClientSecure 去连明文端口会 TLS 握手失败，必须走普通 WiFiClient。
+    const bool isHttps = (strncmp(url, "https://", 8) == 0);
+
+    WiFiClient plainClient;
+    WiFiClientSecure secureClient;
+    if (isHttps) secureClient.setInsecure();
 
     HTTPClient http;
     http.setConnectTimeout(8000);
@@ -104,7 +109,7 @@ bool AIClient::httpPost(const char* url, const char* body, const char* authHeade
     // 实测正常响应在数秒内，15 秒足够覆盖慢速模型，失败则快速报错让用户重试。
     http.setTimeout(15000);
 
-    if (!http.begin(client, url)) return false;
+    if (!http.begin(isHttps ? (WiFiClient&)secureClient : plainClient, url)) return false;
 
     http.addHeader("Content-Type", "application/json");
     http.addHeader("Authorization", authHeader);

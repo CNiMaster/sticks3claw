@@ -2,7 +2,33 @@
 
 基于 ESP32-S3-Pico-1-N8R8 的智能语音助手固件，支持语音对话、多 AI 模型切换、Edge TTS 语音合成、MQTT 局域网通信。
 
-## 硬件规格
+## 最快上手
+
+设备上电后默认走 MQTT 模式（`DEFAULT_COMM_MODE = COMM_MQTT`），
+也就是把话交给 OpenClaw 处理。**所以第一步是先让 OpenClaw 那头就绪**——
+推荐[直连 Gateway](#4-接入-openclaw)，不需要装 broker 和插件：
+
+```
+1. 烧录后上电，板子会开一个叫 Sticks3Claw-Setup 的 WiFi 热点
+2. 手机或电脑连上它，浏览器打开 192.168.4.1，填你家的 WiFi
+3. 在 src/secrets.h 里把某个 AI Provider 指向 OpenClaw Gateway
+   （URL / TOKEN / model = openclaw/default），重新烧录
+```
+
+凭证都填在 `env/secrets.h`（流程见 [配置凭证](#2-配置凭证)）：
+
+| 凭证 | 干什么用 | 哪里拿 |
+|---|---|---|
+| `ENV_VOLCENGINE_APP_ID` / `ENV_VOLCENGINE_TOKEN` | 把你说的话转成文字 | [火山引擎语音控制台](https://console.volcengine.com/speech/app) |
+| OpenClaw Gateway Token | 让 OpenClaw 生成回答 | 你自己的 OpenClaw 配置（`OPENCLAW_GATEWAY_TOKEN`） |
+
+填完烧录，长按 KEY1 说话，松开就等它回答。
+
+> **不接 OpenClaw 也能用**：把 Provider 指向任意 OpenAI 兼容服务即可，
+> 例如 OpenRouter（`ENV_AI1_KEY`，默认模型 `openrouter/free` 免费）。
+> 此时把 KEY2 菜单的 `Mode` 切到 `API`。
+
+## 硬件规格 硬件规格
 
 - **主控**: ESP32-S3-Pico-1-N8R8 (8MB Flash + 8MB PSRAM)
 - **音频**: ES8311 音频编解码 + MEMS 麦克风 + 扬声器 (I2S 16kHz 16-bit Mono)
@@ -196,16 +222,63 @@ pio device monitor -b 115200
 
 串口输出里出现 `IP: x.x.x.x` 表示联网成功；出现 `Init done!` 表示初始化完成。
 
-### 4. OpenClaw MQTT 对接（可选）
+### 4. 接入 OpenClaw
 
-MQTT 模式下设备不直接调 AI，而是把话发给局域网里的 OpenClaw，由它回复。
+设备有两种方式把话交给 OpenClaw。**推荐直连（方式 A）**，它少一跳、少两个依赖。
 
-**链路上有三方，缺一不可：**
+#### 方式 A：直连 Gateway（推荐）
+
+OpenClaw Gateway 自带 **OpenAI 兼容的 HTTP 端点**，设备可以像调普通 AI 一样直接调它，
+**不需要 MQTT broker，也不需要装任何插件**。
+
+```
+ESP32 ──HTTP──► OpenClaw Gateway ──► 你的 Agent
+```
+
+1. 在 OpenClaw 开启这个端点（默认是关的）：
+
+   ```json
+   { "gateway": { "http": { "endpoints": { "chatCompletions": { "enabled": true } } } } }
+   ```
+
+2. 在 `src/secrets.h` 里把某个 provider 指向它（示例用 Provider 2）：
+
+   ```cpp
+   #define AI_PROVIDER_2_NAME    "OpenClaw"
+   #define AI_PROVIDER_2_URL     "http://192.168.1.20:18789/v1/chat/completions"
+   #define AI_PROVIDER_2_KEY     "<你的 OPENCLAW_GATEWAY_TOKEN>"
+   #define AI_PROVIDER_2_MODEL   "openclaw/default"
+   ```
+
+   把 IP 换成运行 OpenClaw 那台电脑的**局域网 IP**（不是 127.0.0.1），
+   端口按你的 Gateway 实际端口填。`KEY` 会自动加上 `Bearer ` 前缀。
+
+3. 上电后用 KEY2 菜单把 `Model` 切到 `OpenClaw` 即可。
+
+想指定会话（例如每台设备一个独立记忆），可在请求里带 `x-openclaw-session-key`
+头——当前固件未暴露该头，需要的话可自行在 `ai_client.cpp` 里加。
+
+> 校验命令（在那台电脑上跑，先确认端点确实通了）：
+> `curl http://127.0.0.1:18789/v1/models -H 'Authorization: Bearer <TOKEN>'`
+
+#### 方式 B：经 MQTT（需要额外基础设施）
+
+设备不直接调 AI，而是把话发给局域网里的 OpenClaw，由它回复。
+**链路上有三方，缺一不可**——插件本身不带 broker：
 
 ```
 ESP32 ──MQTT──► MQTT Broker (Mosquitto) ◄──MQTT── OpenClaw + mqtt 插件 ──► AI
                 （必须自己跑，不随插件自带）
 ```
+
+| | 方式 A 直连 | 方式 B MQTT |
+|---|---|---|
+| 额外要装的东西 | 无 | Mosquitto broker + mqtt 插件 |
+| 请求-响应 | 同步，一次 HTTP 拿回结果 | 异步，靠 `correlationId` 配对 |
+| 断线表现 | 直接报错 | 可能一直等（已有 30s 超时兜底） |
+| 适合 | 绝大多数场景 | 需要 OpenClaw 主动推送消息给设备时 |
+
+以下为方式 B 的具体步骤：
 
 1. **装并启动一个 MQTT Broker**（这一步最容易漏，插件本身**不带** broker）：
 

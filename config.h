@@ -18,9 +18,13 @@
 // 通信模式
 // ============================================================
 enum CommMode {
-    COMM_MQTT,     // MQTT 局域网 → OpenClaw
-    COMM_HTTP_API  // HTTP API → 第三方 AI
+    COMM_MQTT,     // MQTT 局域网 → OpenClaw（需要自己跑 broker + 装插件）
+    COMM_HTTP_API  // HTTP API → 第三方 AI（零额外基础设施）
 };
+// 本设备的主用途是把话交给 OpenClaw Agent 处理，故默认走 MQTT 模式。
+// API 模式（HTTPS 直连第三方 AI）作为不接 OpenClaw 时的备选，用 KEY2 菜单切换。
+// ⚠️ MQTT 模式要求本机已运行 MQTT broker 并且 OpenClaw 装了 mqtt 插件，
+//    否则上电后会一直 Send fail / Timeout——那不是设备故障，是 broker 没起。
 #define DEFAULT_COMM_MODE  COMM_MQTT
 #define DEFAULT_PROVIDER   0
 
