@@ -99,8 +99,10 @@ bool AIClient::httpPost(const char* url, const char* body, const char* authHeade
     client.setInsecure();
 
     HTTPClient http;
-    http.setConnectTimeout(10000);
-    http.setTimeout(30000);
+    http.setConnectTimeout(8000);
+    // 30 秒太长：整条链路是阻塞的，期间屏幕完全不刷新，用户会以为死机。
+    // 实测正常响应在数秒内，15 秒足够覆盖慢速模型，失败则快速报错让用户重试。
+    http.setTimeout(15000);
 
     if (!http.begin(client, url)) return false;
 

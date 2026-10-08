@@ -12,6 +12,7 @@ PowerManager::PowerManager()
     , _screenOffTimeout(SCREEN_OFF_TIMEOUT_MS)
     , _sleepTimeout(SLEEP_TIMEOUT_MS)
     , _justWoke(false)
+    , _busy(false)
     , _display(nullptr)
     , _wifi(nullptr)
     , _mqtt(nullptr)
@@ -27,6 +28,13 @@ void PowerManager::begin(TFTDisplay* display, WiFiManager* wifi, MQTTClient* mqt
     _mqtt = mqtt;
     _lastActivityTime = millis();
     _state = AWAKE;
+    _busy = false;
+}
+
+void PowerManager::setBusy(bool busy) {
+    // 忙结束视为一次活动，避免刚干完活就立刻熄屏
+    if (_busy && !busy) _lastActivityTime = millis();
+    _busy = busy;
 }
 
 void PowerManager::activity() {
@@ -77,6 +85,9 @@ void PowerManager::update() {
         Serial.println("Fully awake after sleep");
         return;
     }
+
+    // 忙时跳过一切省电动作（录音/识别/等待 AI/播放中）
+    if (_busy) return;
 
     if (_state == AWAKE) {
         if (millis() - _lastActivityTime >= _screenOffTimeout) {

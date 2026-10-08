@@ -20,6 +20,10 @@ public:
     void activity();   // 重置空闲计时器
     void wake();       // 强制唤醒
 
+    // 业务忙时挂起省电：录音/识别/等待 AI 回复/播放期间不得熄屏或休眠。
+    // 否则一次耗时较长的 AI 请求会把设备拖进休眠、断掉 WiFi 并中断流程。
+    void setBusy(bool busy);
+
     PowerState getState() const { return _state; }
     bool isAwake() const { return _state == AWAKE; }
     bool isScreenOn() const { return _state == AWAKE; }
@@ -33,6 +37,7 @@ private:
     unsigned long _screenOffTimeout;
     unsigned long _sleepTimeout;
     bool _justWoke;
+    bool _busy;
 
     TFTDisplay* _display;
     WiFiManager* _wifi;

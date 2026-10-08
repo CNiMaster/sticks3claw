@@ -50,6 +50,56 @@ String VolcengineSTT::recognize(const uint8_t* pcmData, size_t length) {
     bool success = false;
 
     WebSocketsClient ws;
+
+    // 回调必须在连接前注册：服务器可能在握手后立即返回鉴权错误，
+    // 若等到音频发完才注册，这类早期错误要等到响应超时才被发现。
+    ws.onEvent([&](WStype_t type, uint8_t* payload, size_t len) {
+        if (type == WStype_BIN && len > 4) {
+            uint8_t msgType = (payload[1] >> 4) & 0x0F;
+
+            if (msgType == MSG_FULL_SERVER_RESP) {
+                // Parse payload (skip 4-byte header + 4-byte payload size)
+                if (len > 8) {
+                    size_t payloadSize = (len > 8) ? len - 8 : 0;
+                    if (payload[2] == SERIAL_JSON && payloadSize > 0) {
+                        // Payload starts at byte 8
+                        String jsonStr((char*)(payload + 8), payloadSize);
+                        JsonDocument doc;
+                        DeserializationError err = deserializeJson(doc, jsonStr);
+                        if (err == DeserializationError::Ok) {
+                            int code = doc["code"] | -1;
+                            if (code == 0) {
+                                // Success - extract text
+                                JsonArray results = doc["result"].as<JsonArray>();
+                                if (!results.isNull() && results.size() > 0) {
+                                    resultText = results[0]["text"].as<String>();
+                                }
+                                // Check if this is the final result (last package response)
+                                int respSeq = doc["sequence"] | 0;
+                                if (respSeq < 0) {
+                                    done = true;
+                                    success = true;
+                                }
+                            } else {
+                                Serial.printf("STT API error: code=%d, msg=%s\n",
+                                             code, doc["message"].as<const char*>());
+                                done = true;
+                            }
+                        }
+                    }
+                }
+            } else if (msgType == MSG_ERROR) {
+                if (len > 8) {
+                    String jsonStr((char*)(payload + 8), len - 8);
+                    Serial.printf("STT protocol error: %s\n", jsonStr.c_str());
+                }
+                done = true;
+            }
+        } else if (type == WStype_DISCONNECTED) {
+            done = true;
+        }
+    });
+
     ws.beginSSL(STT_HOST, STT_PORT, STT_PATH);
 
     unsigned long connectTimeout = millis() + 5000;
@@ -104,60 +154,15 @@ String VolcengineSTT::recognize(const uint8_t* pcmData, size_t length) {
         offset += chunkLen;
         seq++;
 
-        // Small delay between chunks
+        // 发送期间必须驱动 WebSocket 状态机：既要让 TCP 真正把数据发出去，
+        // 也要处理服务器在收音频过程中就返回的中间响应 / 鉴权错误。
+        ws.loop();
         delay(10);
     }
 
     Serial.printf("STT: sent %d audio packets\n", seq - 1);
 
-    // 3. Receive response
-    // Set a callback to capture responses
-    ws.onEvent([&](WStype_t type, uint8_t* payload, size_t len) {
-        if (type == WStype_BIN && len > 4) {
-            uint8_t msgType = (payload[1] >> 4) & 0x0F;
-
-            if (msgType == MSG_FULL_SERVER_RESP) {
-                // Parse payload (skip 4-byte header + 4-byte payload size)
-                if (len > 8) {
-                    size_t payloadSize = (len > 8) ? len - 8 : 0;
-                    if (payload[2] == SERIAL_JSON && payloadSize > 0) {
-                        // Payload starts at byte 8
-                        String jsonStr((char*)(payload + 8), payloadSize);
-                        JsonDocument doc;
-                        DeserializationError err = deserializeJson(doc, jsonStr);
-                        if (err == DeserializationError::Ok) {
-                            int code = doc["code"] | -1;
-                            if (code == 0) {
-                                // Success - extract text
-                                JsonArray results = doc["result"].as<JsonArray>();
-                                if (!results.isNull() && results.size() > 0) {
-                                    resultText = results[0]["text"].as<String>();
-                                }
-                                // Check if this is the final result (last package response)
-                                int respSeq = doc["sequence"] | 0;
-                                if (respSeq < 0) {
-                                    done = true;
-                                    success = true;
-                                }
-                            } else {
-                                Serial.printf("STT API error: code=%d, msg=%s\n",
-                                             code, doc["message"].as<const char*>());
-                                done = true;
-                            }
-                        }
-                    }
-                }
-            } else if (msgType == MSG_ERROR) {
-                if (len > 8) {
-                    String jsonStr((char*)(payload + 8), len - 8);
-                    Serial.printf("STT protocol error: %s\n", jsonStr.c_str());
-                }
-                done = true;
-            }
-        }
-    });
-
-    // Wait for final response
+    // 3. Wait for final response（回调已在连接前注册）
     unsigned long responseTimeout = millis() + 10000;
     while (!done && millis() < responseTimeout) {
         ws.loop();

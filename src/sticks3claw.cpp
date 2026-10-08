@@ -102,7 +102,11 @@ unsigned long recordingStartTime = 0;
 static const unsigned long MENU_TIMEOUT_MS = 10000;
 static const unsigned long RECORDING_TIMEOUT_MS = 10000;
 static const unsigned long BOOT_IGNORE_MS = 3000;
+// MQTT 模式下等待 OpenClaw 回复的上限。超时必须回 IDLE，
+// 否则 Broker 不可达时设备会永远停在「等待回复」状态。
+static const unsigned long MQTT_REPLY_TIMEOUT_MS = 30000;
 static unsigned long bootTime = 0;
+static unsigned long waitingSince = 0;
 
 void startRecording();
 void stopRecording();
@@ -340,6 +344,16 @@ void loop() {
         if (gyroscope->detectShake()) handleShakeGesture();
     }
 
+    // MQTT 模式下可能永远等不到回复（Broker 没开 / OpenClaw 未运行）。
+    // 没有超时的话设备会一直卡在 WAITING_REPLY，既不说话也不休眠。
+    if (currentState == WAITING_REPLY && currentCommMode == COMM_MQTT) {
+        if (millis() - waitingSince >= MQTT_REPLY_TIMEOUT_MS) {
+            Serial.println("MQTT reply timeout");
+            textScroller->addLine("Timeout", TFT_RED);
+            returnToIdle();
+        }
+    }
+
     if (showingHistory) renderHistory();
     else if (currentState == IN_MENU) faceRenderer->update();
     else { faceRenderer->update(); textScroller->update(); }
@@ -351,6 +365,8 @@ void loop() {
 void returnToIdle() {
     currentState = IDLE;
     showingHistory = false;
+    // 录音/识别/等待 AI/播放全流程结束，恢复省电
+    if (powerManager) powerManager->setBusy(false);
     faceRenderer->setEmotion("idle");
     faceRenderer->resume();
 }
@@ -360,6 +376,7 @@ void returnToIdle() {
 // ============================================================
 void startRecording() {
     powerManager->activity();
+    powerManager->setBusy(true);   // 录音链路期间禁止熄屏/休眠
     currentState = RECORDING;
     recordingStartTime = millis();
     faceRenderer->setEmotion("listening");
@@ -400,12 +417,19 @@ void sendTextToAI(const char* text) {
     bool sent = false;
     if (currentCommMode == COMM_MQTT) {
         sent = mqttClient->isConnected() && mqttClient->publishText(text);
-        if (sent) { currentState = WAITING_REPLY; textScroller->addLine("Waiting...", TFT_GREEN); textScroller->setActive(true); }
+        if (sent) {
+            currentState = WAITING_REPLY;
+            waitingSince = millis();
+            powerManager->setBusy(true);
+            textScroller->addLine("Waiting...", TFT_GREEN);
+            textScroller->setActive(true);
+        }
     } else {
         faceRenderer->setEmotion("thinking");
         textScroller->addLine("Thinking...", TFT_YELLOW);
         textScroller->setActive(true);
         currentState = WAITING_REPLY;
+        powerManager->setBusy(true);   // AI 请求可能数十秒，期间不得休眠断网
         convHistory->add("user", text);
         static HistoryEntry historyBuf[50];
         int historyCount = convHistory->getRecent(historyBuf, 50);
