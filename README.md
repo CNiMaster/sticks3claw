@@ -18,23 +18,33 @@
 - **多 AI 模型**: 通过 KEY2 切换 OpenRouter、Deepseek 等模型，支持自定义 URL/Key/模型/提示词
 - **多音色 TTS**: 5 种中文 Edge TTS 音色可选
 - **表情动画**: 7 种情绪（happy/idle/listening/sad/speaking/surprised/thinking），
-  由 `generate_emotions.py` 程序化绘制，运行时从 LittleFS 读取
+  由 `face_renderer` 在屏幕上**实时绘制**（参数化五官 + 眨眼动画），不是播放图片
 - **情绪自动识别**: 从 AI 回复文本推断表情（`mood_detector`），配合角色提示词里的
   `[emotion:xxx]` 标记切换
-- **晃动交互**: 摇晃设备把三轴加速度作为事件发送到 OpenClaw
+- **摇晃交互**: 摇晃设备把三轴加速度作为事件发送到 OpenClaw
 - **多 WiFi 自动匹配**: 依次轮询匹配最多 3 个已配置网络
 - **浏览器配网**: 未配置 WiFi 时自动开热点 `Sticks3Claw-Setup`，浏览器 `192.168.4.1` 配置
 - **对话历史**: 保留多轮上下文（`conversation_history`）
 - **文字滚动显示**: 长文本在屏幕上滚动显示（`text_scroller`）
 - **消息历史查看**: 屏幕可回看最近的消息（`message_history`）
-- **触摸交互**: 电容触摸输入，含校准（`touch_handler`）
-- **音效**: Web Audio 风格实时合成，无需外部音频文件（`sound_effects`）
+- **音效**: 实时合成（`sound_effects`）
 - **横竖屏自适应**: 按陀螺仪方向切换显示朝向（`orientation_manager`）
 - **省电模式**: 三态电源管理 AWAKE / SCREEN_OFF / LIGHT_SLEEP，唤醒后自动恢复
 
 > **关于「离线」**：本项目的语音识别（火山引擎）、语音合成（微软 Edge TTS）、
 > AI 对话（OpenRouter / Deepseek）**全部走云端**，需要联网。
 > 没有网时设备只会显示表情，不会响应语音。
+
+> **关于 `data/emotions/`**：这是 `generate_emotions.py` 生成的 `.rgb565` 帧素材
+> （7 种情绪共 25 帧，尺寸与屏幕一致为 135×240）。**当前固件并未读取它们**——
+> 表情由 `face_renderer` 实时绘制。该目录是预留的离线素材，若后续启用需要自行
+> 集成 LittleFS 读取逻辑。
+>
+> **烧录时不必管文件系统**：`platformio.ini` 里配了 `board_build.filesystem = littlefs`，
+> 但因为表情素材未被使用，`pio run --target upload` 不会触发文件系统打包。
+> 若哪天启用了该目录，Apple Silicon Mac 上可能遇到
+> `mklittlefs: Bad CPU type in executable`（PlatformIO 装的是 x86_64 版工具），
+> 用 Rosetta 跑 PlatformIO 或手动编译 LittleFS 镜像即可绕过。
 
 ## 系统架构
 
@@ -100,19 +110,19 @@ sticks3claw/
 │   │   └── gyroscope.h/cpp          # BMI270 六轴 IMU
 │   ├── input/
 │   │   ├── button_handler.h/cpp     # 按钮处理 (KEY1/KEY2)
-│   │   └── touch_handler.h/cpp      # 触摸输入与校准
+│   │   └── touch_handler.h/cpp      # ⚠️ 未接线：电容触摸代码存在但主程序未调用
 │   ├── system/
-│   │   └── power_manager.cpp        # 三态电源管理
+│   │   └── power_manager.cpp        # 三态电源管理（ext1 唤醒 + GPIO 中断）
 │   ├── stt/
 │   │   └── volcengine_stt.h/cpp     # 火山引擎语音识别 (WebSocket)
 │   └── utils/
 │       ├── base64.h/cpp             # Base64 编解码
-│       └── logger.h                 # 日志
+│       └── logger.h                 # ⚠️ 未接线：日志工具存在但主程序未调用
 ├── platformio.ini                   # PlatformIO 配置和依赖
-├── generate_emotions.py             # 生成表情动画资源（Python）
+├── generate_emotions.py             # 生成 .rgb565 帧素材（当前固件未使用，见功能章说明）
 ├── User_Setup.h                     # TFT_eSPI 库配置（引脚/字体）
 └── data/
-    └── emotions/                    # 表情动画资源 (LittleFS)
+    └── emotions/                    # 预留的 .rgb565 帧素材（当前固件未使用）
 ```
 
 ## 快速开始
