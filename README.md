@@ -198,12 +198,72 @@ pio device monitor -b 115200
 
 ### 4. OpenClaw MQTT 对接（可选）
 
-MQTT 模式下通过局域网与 OpenClaw 通信：
+MQTT 模式下设备不直接调 AI，而是把话发给局域网里的 OpenClaw，由它回复。
 
-1. 安装 OpenClaw MQTT 插件：`@turquoisebay/openclaw-mqtt`
-2. 在 OpenClaw 配置中设置 MQTT Broker 地址（与 `env/secrets.h` 中 `ENV_MQTT_HOST` 一致，
-   必须是运行 OpenClaw 那台电脑的局域网 IP）
-3. ESP32 启动后自动连接，通过 `openclaw/inbound` 发送文本，从 `openclaw/outbound` 接收回复
+**链路上有三方，缺一不可：**
+
+```
+ESP32 ──MQTT──► MQTT Broker (Mosquitto) ◄──MQTT── OpenClaw + mqtt 插件 ──► AI
+                （必须自己跑，不随插件自带）
+```
+
+1. **装并启动一个 MQTT Broker**（这一步最容易漏，插件本身**不带** broker）：
+
+   ```bash
+   # macOS
+   brew install mosquitto && brew services start mosquitto
+   ```
+   默认监听 `1883`，默认允许匿名连接（无需用户名密码，与本项目一致）。
+
+2. **安装 OpenClaw 的 MQTT 插件**：
+
+   ```bash
+   openclaw plugins install @turquoisebay/mqtt
+   ```
+
+   > ⚠️ 包名在 v0.1.12 后已从 `@turquoisebay/openclaw-mqtt` 改名为 **`@turquoisebay/mqtt`**。
+   > 旧名仍可装但停在 0.1.12，请用新名。
+
+3. **配置插件**（`~/.openclaw/openclaw.json`）：
+
+   ```json
+   {
+     "channels": {
+       "mqtt": {
+         "brokerUrl": "mqtt://localhost:1883",
+         "topics": { "inbound": "openclaw/inbound", "outbound": "openclaw/outbound" },
+         "qos": 1
+       }
+     }
+   }
+   ```
+   然后 `openclaw gateway restart`。
+
+4. **设备上填 broker 地址**：`env/secrets.h` 的 `ENV_MQTT_HOST` 填**运行 OpenClaw 那台电脑的局域网 IP**
+   （如 `192.168.1.20`），**不是** `127.0.0.1`，也不能填设备自己的地址。
+
+5. 设备上用 KEY2 菜单切到 `Mode = MQTT`。启动后串口应出现 `MQTT connected!` 与
+   `Subscribed to openclaw/outbound: OK`。
+
+**Topic 与消息格式**（与插件默认一致，通常无需改）：
+
+| 方向 | Topic | 载荷 |
+|---|---|---|
+| 设备 → OpenClaw | `openclaw/inbound` | `{"senderId":"sticks3","text":"你好","correlationId":"msg_1"}` |
+| OpenClaw → 设备 | `openclaw/outbound` | `{"senderId":"openclaw","text":"...","kind":"final","ts":...}` |
+
+**已知限制**：
+
+- **所有设备共用同一个会话**。插件按 `senderId` 分组会话（`mqtt:{senderId}`），
+  而本项目 `senderId` 是固定值 `sticks3`（不带 MAC）。若同时跑多台设备，
+  它们的对话历史会在 OpenClaw 侧混在一起。想要独立记忆，需自行把 `senderId`
+  改成带 MAC 后缀。
+- **回复里的 `emotion` 字段对不上**。插件返回 `kind`/`ts`，没有 `emotion`；
+  本项目读 `msg["emotion"]` 拿不到时会退回用 `MoodDetector` 从文本推断情绪。
+  功能仍然可用，只是少了一层由 OpenClaw 精确指定表情的能力。
+
+**安全提醒**：任何能往 `openclaw/inbound` 发消息的设备都能驱动你的 Agent。
+MQTT 只在受信任的内网使用——不要把 broker 端口暴露到公网。
 
 ## 操作说明
 
