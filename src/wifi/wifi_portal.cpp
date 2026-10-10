@@ -84,19 +84,12 @@ label{display:block;color:#aaa;font-size:0.85em;margin-bottom:2px}
 </style></head><body>
 <h1>Settings</h1>
 <div class="card"><h2>AI Provider</h2>
-<label>Mode</label><select id="mode"><option value="0">MQTT (OpenClaw)</option><option value="1">HTTP API</option></select>
 <label>Active Provider</label><select id="active"><option value="1">Provider 1</option><option value="2">Provider 2</option></select>
 <label>Name</label><input id="p_name">
 <label>API URL</label><input id="p_url">
 <label>API Key</label><input id="p_key" type="password">
 <label>Model</label><input id="p_model">
 <label>System Prompt</label><textarea id="p_prompt"></textarea>
-</div>
-<div class="card"><h2>MQTT</h2>
-<label>Broker Host</label><input id="mqtt_host">
-<label>Port</label><input id="mqtt_port" type="number">
-<label>Inbound Topic</label><input id="mqtt_in">
-<label>Outbound Topic</label><input id="mqtt_out">
 </div>
 <div class="card"><h2>STT (Volcengine)</h2>
 <label>App ID</label><input id="stt_appid">
@@ -122,10 +115,6 @@ fetch('/api/settings').then(r=>r.json()).then(d=>{
     document.getElementById('p_model').value=d.provider.model||'';
     document.getElementById('p_prompt').value=d.provider.prompt||'';
   }
-  document.getElementById('mqtt_host').value=d.mqtt_host||'';
-  document.getElementById('mqtt_port').value=d.mqtt_port||1883;
-  document.getElementById('mqtt_in').value=d.mqtt_in||'';
-  document.getElementById('mqtt_out').value=d.mqtt_out||'';
   document.getElementById('stt_appid').value=d.stt_appid||'';
   document.getElementById('stt_token').value=d.stt_token||'';
   document.getElementById('stt_cluster').value=d.stt_cluster||'';
@@ -136,17 +125,12 @@ fetch('/api/settings').then(r=>r.json()).then(d=>{
 });
 function save(){
   let p={
-    mode:document.getElementById('mode').value,
     active:document.getElementById('active').value,
     p_name:document.getElementById('p_name').value,
     p_url:document.getElementById('p_url').value,
     p_key:document.getElementById('p_key').value,
     p_model:document.getElementById('p_model').value,
     p_prompt:document.getElementById('p_prompt').value,
-    mqtt_host:document.getElementById('mqtt_host').value,
-    mqtt_port:document.getElementById('mqtt_port').value,
-    mqtt_in:document.getElementById('mqtt_in').value,
-    mqtt_out:document.getElementById('mqtt_out').value,
     stt_appid:document.getElementById('stt_appid').value,
     stt_token:document.getElementById('stt_token').value,
     stt_cluster:document.getElementById('stt_cluster').value,
@@ -278,13 +262,8 @@ void WiFiPortal::handleStatus(AsyncWebServerRequest* request) {
     int active = cfg.getActiveProvider();
     auto prov = cfg.getProvider(active);
     String json = "{";
-    json += "\"mode\":" + String(cfg.getCommMode());
-    json += ",\"active\":" + String(active);
+    json += "\"active\":" + String(active);
     json += ",\"provider\":{\"name\":\"" + prov.name + "\",\"url\":\"" + prov.url + "\",\"key\":\"" + prov.key + "\",\"model\":\"" + prov.model + "\",\"prompt\":\"" + prov.prompt + "\"}";
-    json += ",\"mqtt_host\":\"" + cfg.getMqttHost() + "\"";
-    json += ",\"mqtt_port\":" + String(cfg.getMqttPort());
-    json += ",\"mqtt_in\":\"" + cfg.getMqttInboundTopic() + "\"";
-    json += ",\"mqtt_out\":\"" + cfg.getMqttOutboundTopic() + "\"";
     json += ",\"stt_appid\":\"" + cfg.getSttAppId() + "\"";
     json += ",\"stt_token\":\"" + cfg.getSttToken() + "\"";
     json += ",\"stt_cluster\":\"" + cfg.getSttCluster() + "\"";
@@ -314,7 +293,6 @@ void WiFiPortal::handleSaveSettings(AsyncWebServerRequest* request) {
     }
 
     auto& cfg = AppConfig::instance();
-    cfg.setCommMode(doc["mode"].as<int>());
     cfg.setActiveProvider(doc["active"].as<int>());
 
     AIProviderConfig prov;
@@ -324,9 +302,6 @@ void WiFiPortal::handleSaveSettings(AsyncWebServerRequest* request) {
     prov.model = doc["p_model"].as<String>();
     prov.prompt = doc["p_prompt"].as<String>();
     cfg.setProvider(cfg.getActiveProvider(), prov);
-
-    cfg.setMqttHost(doc["mqtt_host"].as<String>());
-    cfg.setMqttPort(doc["mqtt_port"].as<int>());
 
     cfg.setSttCredentials(doc["stt_appid"].as<String>(), doc["stt_token"].as<String>(), doc["stt_cluster"].as<String>());
 

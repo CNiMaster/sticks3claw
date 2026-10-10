@@ -17,7 +17,6 @@
 #include "display/message_history.h"
 #include "display/mood_detector.h"
 #include "sensors/gyroscope.h"
-#include "communication/mqtt_client.h"
 #include "communication/ai_client.h"
 #include "input/button_handler.h"
 #include "system/power_manager.h"
@@ -43,12 +42,12 @@ static const char* ttsVoiceLabels[] = {
 // KEY2 菜单
 // ============================================================
 enum MenuCategory {
-    MENU_COMM_MODE, MENU_AI_MODEL, MENU_ROLE, MENU_TTS_VOICE,
+    MENU_AI_MODEL, MENU_ROLE, MENU_TTS_VOICE,
     MENU_ORIENTATION, MENU_TEXT_DISPLAY
 };
-#define MENU_CATEGORY_COUNT 6
+#define MENU_CATEGORY_COUNT 5
 static const char* menuCategoryNames[] = {
-    "Mode", "Model", "Role", "Voice", "Orient", "Text"
+    "Model", "Role", "Voice", "Orient", "Text"
 };
 
 static const char* rolePrompts[ROLE_PRESET_COUNT] = {
@@ -75,7 +74,6 @@ Gyroscope* gyroscope;
 OrientationManager* orientationManager;
 TextScroller* textScroller;
 MessageHistory* messageHistory;
-MQTTClient* mqttClient;
 AIClient* aiClient;
 ButtonHandler* recordButton;
 ButtonHandler* modeButton;
@@ -90,11 +88,10 @@ ConversationHistory* convHistory;
 // ============================================================
 enum State { IDLE, RECORDING, PROCESSING, WAITING_REPLY, IN_MENU };
 State currentState = IDLE;
-CommMode currentCommMode = DEFAULT_COMM_MODE;
 int currentProvider = DEFAULT_PROVIDER;
 int currentTtsVoice = DEFAULT_TTS_VOICE;
 int currentRole = DEFAULT_ROLE;
-MenuCategory currentMenu = MENU_COMM_MODE;
+MenuCategory currentMenu = MENU_AI_MODEL;
 bool showText = true;
 bool showingHistory = false;
 unsigned long menuEnterTime = 0;
@@ -102,16 +99,11 @@ unsigned long recordingStartTime = 0;
 static const unsigned long MENU_TIMEOUT_MS = 10000;
 static const unsigned long RECORDING_TIMEOUT_MS = 10000;
 static const unsigned long BOOT_IGNORE_MS = 3000;
-// MQTT 模式下等待 OpenClaw 回复的上限。超时必须回 IDLE，
-// 否则 Broker 不可达时设备会永远停在「等待回复」状态。
-static const unsigned long MQTT_REPLY_TIMEOUT_MS = 30000;
 static unsigned long bootTime = 0;
-static unsigned long waitingSince = 0;
 
 void startRecording();
 void stopRecording();
 void handleShakeGesture();
-void handleMQTTMessage(JsonDocument& msg);
 void handleMenuShortPress();
 void handleMenuLongPress();
 void enterMenu();
@@ -202,19 +194,24 @@ void setup() {
     recordButton = new ButtonHandler(RECORD_BUTTON);
     modeButton = new ButtonHandler(MODE_BUTTON);
 
-    {
-        auto& cfg = AppConfig::instance();
-        mqttClient = new MQTTClient(
-            cfg.getMqttHost().c_str(), cfg.getMqttPort(), cfg.getMqttClientId().c_str(),
-            cfg.getMqttInboundTopic().c_str(), cfg.getMqttOutboundTopic().c_str());
-    }
-    mqttClient->begin();
-    mqttClient->onMessage(handleMQTTMessage);
-    mqttClient->connect();
-
     aiClient = new AIClient();
     convHistory = new ConversationHistory();
     convHistory->begin();
+
+    // 默认 provider 可能没配（URL 或 Key 为空），那样第一次请求必然失败。
+    // 启动时挑第一个配置完整的，保证上电就能用。
+    if (strlen(aiProviders[currentProvider].apiUrl) == 0 ||
+        strlen(aiProviders[currentProvider].apiKey) == 0) {
+        for (int i = 0; i < AI_PROVIDERS_COUNT; i++) {
+            if (strlen(aiProviders[i].apiUrl) > 0 && strlen(aiProviders[i].apiKey) > 0) {
+                currentProvider = i;
+                break;
+            }
+        }
+    }
+    Serial.printf("AI provider: %s\n",
+                  strlen(aiProviders[currentProvider].apiUrl) > 0
+                      ? aiProviders[currentProvider].name : "(none configured)");
 
     {
         auto& cfg = AppConfig::instance();
@@ -223,7 +220,7 @@ void setup() {
     tts = new EdgeTTS(getCurrentVoiceId());
 
     powerManager = new PowerManager();
-    powerManager->begin(display, wifiManager, mqttClient);
+    powerManager->begin(display, wifiManager);
 
     returnToIdle();
     Serial.printf("Init done! Heap:%u PSRAM:%u\n", ESP.getFreeHeap(), ESP.getFreePsram());
@@ -238,7 +235,6 @@ void loop() {
 
     powerManager->update();
     wifiManager->update();
-    mqttClient->update();
 
     recordButton->update();
     modeButton->update();
@@ -344,16 +340,6 @@ void loop() {
         if (gyroscope->detectShake()) handleShakeGesture();
     }
 
-    // MQTT 模式下可能永远等不到回复（Broker 没开 / OpenClaw 未运行）。
-    // 没有超时的话设备会一直卡在 WAITING_REPLY，既不说话也不休眠。
-    if (currentState == WAITING_REPLY && currentCommMode == COMM_MQTT) {
-        if (millis() - waitingSince >= MQTT_REPLY_TIMEOUT_MS) {
-            Serial.println("MQTT reply timeout");
-            textScroller->addLine("Timeout", TFT_RED);
-            returnToIdle();
-        }
-    }
-
     if (showingHistory) renderHistory();
     else if (currentState == IN_MENU) faceRenderer->update();
     else { faceRenderer->update(); textScroller->update(); }
@@ -414,17 +400,7 @@ void stopRecording() {
 }
 
 void sendTextToAI(const char* text) {
-    bool sent = false;
-    if (currentCommMode == COMM_MQTT) {
-        sent = mqttClient->isConnected() && mqttClient->publishText(text);
-        if (sent) {
-            currentState = WAITING_REPLY;
-            waitingSince = millis();
-            powerManager->setBusy(true);
-            textScroller->addLine("Waiting...", TFT_GREEN);
-            textScroller->setActive(true);
-        }
-    } else {
+    {
         faceRenderer->setEmotion("thinking");
         textScroller->addLine("Thinking...", TFT_YELLOW);
         textScroller->setActive(true);
@@ -462,38 +438,6 @@ void sendTextToAI(const char* text) {
             textScroller->addLine("AI error", TFT_RED);
             returnToIdle();
         }
-    }
-    if (!sent && currentCommMode == COMM_MQTT) { textScroller->addLine("Send fail", TFT_RED); returnToIdle(); }
-}
-
-// ============================================================
-// MQTT
-// ============================================================
-void handleMQTTMessage(JsonDocument& msg) {
-    powerManager->activity();
-    const char* text = msg["text"] | "";
-    if (strlen(text) == 0) return;
-    String cleanText;
-    const char* emotion = msg["emotion"] | "";
-    if (strlen(emotion) > 0) { MoodDetector::parseEmotionTag(text, cleanText); if (cleanText.length() == 0) cleanText = text; }
-    else { emotion = MoodDetector::parseEmotionTag(text, cleanText); if (strlen(emotion) == 0) { emotion = MoodDetector::detectMood(text); cleanText = text; } }
-
-    textScroller->clear();
-    textScroller->addLine(cleanText.c_str(), TFT_CYAN);
-    messageHistory->add(cleanText.c_str(), Message::AI_REPLY);
-    faceRenderer->setEmotion(emotion);
-
-    if (currentState == WAITING_REPLY) {
-        textScroller->setActive(true);
-        for (int i = 0; i < 30; i++) { textScroller->update(); faceRenderer->update(); delay(16); }
-        faceRenderer->setEmotion("speaking");
-        uint8_t* pcmData = nullptr; size_t pcmLength = 0;
-        if (tts->synthesize(cleanText.c_str(), &pcmData, &pcmLength) && pcmData) {
-            player->play(pcmData, pcmLength);
-            while (player->isPlaying()) { faceRenderer->update(); textScroller->update(); delay(10); }
-            player->releasePlaybackBuffer(); free(pcmData);
-        }
-        returnToIdle();
     }
 }
 
@@ -538,12 +482,6 @@ void exitMenu() { currentState = IDLE; faceRenderer->resume(); }
 void handleMenuShortPress() {
     menuEnterTime = millis();
     switch (currentMenu) {
-        case MENU_COMM_MODE:
-            currentCommMode = (currentCommMode == COMM_MQTT) ? COMM_HTTP_API : COMM_MQTT;
-            if (currentCommMode == COMM_HTTP_API && strlen(aiProviders[currentProvider].apiUrl) == 0)
-                for (int i = 1; i < AI_PROVIDERS_COUNT; i++)
-                    if (strlen(aiProviders[i].apiUrl) > 0) { currentProvider = i; break; }
-            break;
         case MENU_AI_MODEL:
             if (AI_PROVIDERS_COUNT <= 1) break;
             do { currentProvider = (currentProvider + 1) % AI_PROVIDERS_COUNT; }
@@ -588,21 +526,6 @@ void displayMenu() {
     uint16_t valColor = TFT_WHITE;
 
     switch (currentMenu) {
-        case MENU_COMM_MODE: {
-            const char* mode = (currentCommMode == COMM_MQTT) ? "MQTT" : "API";
-            valColor = (currentCommMode == COMM_MQTT) ? TFT_GREEN : TFT_CYAN;
-            tft->setTextColor(valColor);
-            int modeW = strlen(mode) * 24;
-            tft->setCursor((w - modeW) / 2, 45);
-            tft->print(mode);
-            tft->setTextSize(1);
-            tft->setTextColor(0x7BEF);
-            if (currentCommMode == COMM_MQTT && mqttClient) {
-                tft->setCursor(4, h - 16);
-                tft->print(mqttClient->isConnected() ? "Broker: OK" : "Broker: ...");
-            }
-            break;
-        }
         case MENU_AI_MODEL:  tft->setTextColor(TFT_CYAN); tft->setCursor(4, 50); tft->print(getCurrentModelName()); break;
         case MENU_ROLE:      tft->setTextColor(TFT_MAGENTA); tft->setCursor((w - strlen(roleNames[currentRole])*24)/2, 50); tft->print(roleNames[currentRole]); break;
         case MENU_TTS_VOICE: tft->setTextColor(TFT_WHITE); tft->setCursor(4, 50); tft->print(ttsVoiceLabels[currentTtsVoice]); break;
@@ -640,14 +563,9 @@ const char* getCurrentModelName() { return aiProviders[currentProvider].name; }
 // ============================================================
 void handleShakeGesture() {
     powerManager->activity();
+    // 本地反馈：摇一摇给个惊讶表情 + 音效。
+    // 原先这里会把加速度作为事件发到 MQTT；移除 MQTT 后事件没有去处，
+    // 保留交互反馈本身即可。
     faceRenderer->setEmotion("surprised");
     soundEffects->play("boing", player);
-    JsonDocument eventDoc;
-    eventDoc["type"] = "shake";
-    eventDoc["timestamp"] = millis();
-    float ax, ay, az;
-    gyroscope->getAcceleration(ax, ay, az);
-    eventDoc["accel"]["x"] = ax; eventDoc["accel"]["y"] = ay; eventDoc["accel"]["z"] = az;
-    String eventJson; serializeJson(eventDoc, eventJson);
-    if (mqttClient->isConnected()) mqttClient->publishEvent("shake", eventJson.c_str());
 }

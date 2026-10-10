@@ -2,7 +2,6 @@
 #include "config.h"
 #include "../display/tft_display.h"
 #include "../wifi/wifi_manager.h"
-#include "../communication/mqtt_client.h"
 #include <esp_sleep.h>
 #include <esp_wifi.h>
 
@@ -15,17 +14,15 @@ PowerManager::PowerManager()
     , _busy(false)
     , _display(nullptr)
     , _wifi(nullptr)
-    , _mqtt(nullptr)
 {
 }
 
 PowerManager::~PowerManager() {
 }
 
-void PowerManager::begin(TFTDisplay* display, WiFiManager* wifi, MQTTClient* mqtt) {
+void PowerManager::begin(TFTDisplay* display, WiFiManager* wifi) {
     _display = display;
     _wifi = wifi;
-    _mqtt = mqtt;
     _lastActivityTime = millis();
     _state = AWAKE;
     _busy = false;
@@ -73,12 +70,6 @@ void PowerManager::update() {
         if (_wifi && !_wifi->isConnected()) {
             Serial.println("Reconnecting WiFi after sleep...");
             _wifi->connect();
-        }
-
-        // 重连 MQTT
-        if (_mqtt && !_mqtt->isConnected()) {
-            Serial.println("Reconnecting MQTT after sleep...");
-            _mqtt->connect();
         }
 
         if (_wakeCallback) _wakeCallback();

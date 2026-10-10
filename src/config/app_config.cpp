@@ -26,20 +26,9 @@ void AppConfig::loadDefaults() {
         Serial.println("AppConfig: WiFi defaults loaded from secrets.h");
     }
 
-    Settings mqtt("mqtt", true);
-    if (mqtt.GetString("host").empty()) {
-        mqtt.SetString("host", MQTT_BROKER_HOST);
-        mqtt.SetInt("port", MQTT_BROKER_PORT);
-        mqtt.SetString("client_id", MQTT_CLIENT_ID);
-        mqtt.SetString("inbound", MQTT_INBOUND_TOPIC);
-        mqtt.SetString("outbound", MQTT_OUTBOUND_TOPIC);
-        Serial.println("AppConfig: MQTT defaults loaded from config.h");
-    }
-
     Settings ai("ai", true);
     if (ai.GetString("p0_name").empty()) {
         ai.SetInt("active", DEFAULT_PROVIDER);
-        ai.SetInt("mode", DEFAULT_COMM_MODE);
         ai.SetString("p0_name", AI_PROVIDER_1_NAME);
         ai.SetString("p0_url", AI_PROVIDER_1_URL);
         ai.SetString("p0_key", AI_PROVIDER_1_KEY);
@@ -106,17 +95,6 @@ void AppConfig::clearWiFi() {
     s.EraseAll();
 }
 
-// MQTT
-String AppConfig::getMqttHost() { return Settings("mqtt", false).GetString("host").c_str(); }
-int AppConfig::getMqttPort() { return Settings("mqtt", false).GetInt("port", 1883); }
-String AppConfig::getMqttClientId() { return Settings("mqtt", false).GetString("client_id", "sticks3").c_str(); }
-String AppConfig::getMqttInboundTopic() { return Settings("mqtt", false).GetString("inbound", "openclaw/inbound").c_str(); }
-String AppConfig::getMqttOutboundTopic() { return Settings("mqtt", false).GetString("outbound", "openclaw/outbound").c_str(); }
-String AppConfig::getMqttUser() { return Settings("mqtt", false).GetString("user").c_str(); }
-String AppConfig::getMqttPassword() { return Settings("mqtt", false).GetString("password").c_str(); }
-void AppConfig::setMqttHost(const String& v) { Settings("mqtt", true).SetString("host", v.c_str()); }
-void AppConfig::setMqttPort(int v) { Settings("mqtt", true).SetInt("port", v); }
-
 // AI
 int AppConfig::getActiveProvider() { return Settings("ai", false).GetInt("active", 0); }
 void AppConfig::setActiveProvider(int idx) { Settings("ai", true).SetInt("active", idx); }
@@ -151,9 +129,6 @@ int AppConfig::getProviderCount() {
     }
     return count;
 }
-
-int AppConfig::getCommMode() { return Settings("ai", false).GetInt("mode", COMM_MQTT); }
-void AppConfig::setCommMode(int mode) { Settings("ai", true).SetInt("mode", mode); }
 
 // STT
 String AppConfig::getSttAppId() { return String(Settings("stt", false).GetString("app_id").c_str()); }

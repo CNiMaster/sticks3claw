@@ -7,14 +7,13 @@ enum PowerState { AWAKE, SCREEN_OFF, LIGHT_SLEEP };
 
 class TFTDisplay;
 class WiFiManager;
-class MQTTClient;
 
 class PowerManager {
 public:
     PowerManager();
     ~PowerManager();
 
-    void begin(TFTDisplay* display, WiFiManager* wifi, MQTTClient* mqtt);
+    void begin(TFTDisplay* display, WiFiManager* wifi);
     void update();
 
     void activity();   // 重置空闲计时器
@@ -41,7 +40,6 @@ private:
 
     TFTDisplay* _display;
     WiFiManager* _wifi;
-    MQTTClient* _mqtt;
     std::function<void()> _wakeCallback;
 
     void enterScreenOff();

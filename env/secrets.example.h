@@ -31,8 +31,7 @@
 
 // Provider 2 在 src/secrets.h 里配置（默认留空，未启用）
 
-// ---------- MQTT（可选，仅接入 OpenClaw 时需要）----------
-// 填运行 OpenClaw 那台电脑的局域网 IP，不是 127.0.0.1
-#define ENV_MQTT_HOST "192.168.x.x"
-
+// ---------- 接 OpenClaw（可选）----------
+// 不走这个文件：OpenClaw Gateway 的地址/Key/模型配在 src/secrets.h 的
+// AI_PROVIDER_1_* 或 AI_PROVIDER_2_* 里，见该文件内的说明。
 #endif

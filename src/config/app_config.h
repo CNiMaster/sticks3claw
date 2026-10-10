@@ -30,17 +30,6 @@ public:
     void addWiFi(const String& ssid, const String& password);
     void clearWiFi();
 
-    // MQTT
-    String getMqttHost();
-    int getMqttPort();
-    String getMqttClientId();
-    String getMqttInboundTopic();
-    String getMqttOutboundTopic();
-    String getMqttUser();
-    String getMqttPassword();
-    void setMqttHost(const String& v);
-    void setMqttPort(int v);
-
     // AI
     int getActiveProvider();
     void setActiveProvider(int idx);
