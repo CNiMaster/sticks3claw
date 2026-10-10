@@ -17,9 +17,29 @@
 // ============================================================
 // 通信模式
 // ============================================================
-// 通信方式统一为 HTTP：设备直接调 OpenAI 兼容端点。
-// 目标是 OpenClaw Gateway 就填它的地址，目标是 OpenRouter/Deepseek 就填它们的地址——
-// 同一条代码路径，不需要 broker 或插件中转。
+// ============================================================
+// OpenClaw Gateway（推荐）
+// ============================================================
+// 填了地址就启用。启用后：
+//   - 语音转写交给 Gateway（Mac 本地识别），设备端不再需要火山引擎凭证
+//   - 对话走 WebSocket，由服务端推送结果，长任务也能等到（上限 120 秒）
+// 连不上时自动回退到 HTTP + 火山引擎路径，不会让设备变砖。
+//
+// 在 env/secrets.h 里填真实值（模板见 env/secrets.example.h）：
+//   OPENCLAW_GATEWAY_HOST  运行 OpenClaw 那台电脑的局域网 IP，如 "192.168.1.20"
+//                          留空则完全不启用
+//   OPENCLAW_GATEWAY_TOKEN 与 Gateway 的 gateway.auth.token 一致
+#ifndef OPENCLAW_GATEWAY_HOST
+  #define OPENCLAW_GATEWAY_HOST  ""
+#endif
+#ifndef OPENCLAW_GATEWAY_TOKEN
+  #define OPENCLAW_GATEWAY_TOKEN  ""
+#endif
+#define OPENCLAW_GATEWAY_PORT    18789
+#define OPENCLAW_RETRY_INTERVAL  15000
+
+// 备用通信方式：HTTP 直连 OpenAI 兼容端点。
+// 目标是 OpenRouter/Deepseek 就填它们的地址；不接 OpenClaw 时走这条路。
 #define DEFAULT_PROVIDER   0
 
 // ============================================================

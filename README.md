@@ -4,29 +4,34 @@
 
 它不追求在 1.14 寸屏上做信息交互——屏只负责表情和简短状态，真正的输入输出都是语音。
 
-## 最快上手
+## 两种用法
 
-设备上电后把话交给 AI 处理。想接自己的 OpenClaw Agent 就直连它的 Gateway
-（不需要 broker 或插件，见 [接入 OpenClaw](#4-接入-openclaw)）：
+**用法 A：接 OpenClaw（推荐）**
+
+Mac 上跑着 OpenClaw，设备通过局域网连它的 Gateway：
+
+- **语音转写由 Mac 本地完成**，设备端不用注册火山引擎、不用填 Token
+- 对话走 **WebSocket**，服务端主动推送结果 → **派活这类长任务也能等到**（上限 120 秒）
+- 只需一个 Gateway Token
+
+**用法 B：直连 AI 服务**
+
+不装 OpenClaw 也能用，设备直接 HTTPS 调 OpenAI 兼容服务（OpenRouter / Deepseek 等）。
+需要自备火山引擎凭证做转写，且是**一问一答**（15 秒超时，适合短任务）。
+
+> 两条路可以同时配好：**填了 Gateway 地址就走 A，连不上自动回退到 B**，不会变砖。
+
+## 最快上手（用法 A）
 
 ```
 1. 烧录后上电，板子会开一个叫 Sticks3Claw-Setup 的 WiFi 热点
 2. 手机或电脑连上它，浏览器打开 192.168.4.1，填你家的 WiFi
-3. 在 src/secrets.h 里把某个 AI Provider 指向 OpenClaw Gateway
-   （URL / TOKEN / model = openclaw/default），重新烧录
+3. src/secrets.h 里填 OPENCLAW_GATEWAY_HOST（Mac 的局域网 IP）和
+   OPENCLAW_GATEWAY_TOKEN，重新烧录
+4. Mac 侧改三处配置（见 [接入 OpenClaw](#4-接入-openclaw)）
 ```
 
-凭证都填在 `env/secrets.h`（流程见 [配置凭证](#2-配置凭证)）：
-
-| 凭证 | 干什么用 | 哪里拿 |
-|---|---|---|
-| `ENV_VOLCENGINE_APP_ID` / `ENV_VOLCENGINE_TOKEN` | 把你说的话转成文字 | [火山引擎语音控制台](https://console.volcengine.com/speech/app) |
-| OpenClaw Gateway Token | 让 OpenClaw 生成回答 | 你自己的 OpenClaw 配置（`OPENCLAW_GATEWAY_TOKEN`） |
-
 填完烧录，长按 KEY1 说话，松开就等它回答（语音播报 + 表情变化）。
-
-> **不接 OpenClaw 也能用**：把 Provider 指向任意 OpenAI 兼容服务即可，
-> 例如 OpenRouter（`ENV_AI1_KEY`，默认模型 `openrouter/free` 免费）。
 
 ## 硬件规格
 
@@ -222,61 +227,89 @@ pio device monitor -b 115200
 
 ### 4. 接入 OpenClaw
 
-设备有两种方式把话交给 OpenClaw。**推荐直连（方式 A）**，它少一跳、少两个依赖。
-
-#### 方式 A：直连 Gateway（推荐）
-
-OpenClaw Gateway 自带 **OpenAI 兼容的 HTTP 端点**，设备可以像调普通 AI 一样直接调它，
-**不需要 MQTT broker，也不需要装任何插件**。
+设备通过 **WebSocket** 连 Gateway（Gateway 原生就是 WS，双向，不需要 broker 或插件）。
 
 ```
-ESP32 ──HTTP──► OpenClaw Gateway ──► 你的 Agent
+按住 KEY1 录音
+   │
+   ├─ PCM 分片 → talk.session.appendAudio ──► Mac: 本地 STT → 文字
+   │
+   └─ 文字 → chat.send ──► Mac: Agent（长任务也行）
+                              │
+ESP32 ◄── 回复文本 ────────────┘
+   │
+   └─ Edge TTS 播报 + 屏幕表情
 ```
 
-1. 在 OpenClaw 开启这个端点（默认是关的）：
+> **版本要求**：Talk mode 从 OpenClaw **2026.4.10** 起可用，2026.6 起成熟。
+> 不确定就跑 `openclaw --version`。
 
-   ```json
-   { "gateway": { "http": { "endpoints": { "chatCompletions": { "enabled": true } } } } }
-   ```
+#### 第 1 步：Mac 侧改三处配置
 
-2. 在 `src/secrets.h` 里把某个 provider 指向它（示例用 Provider 2）：
+编辑 `~/.openclaw/openclaw.json`（先备份）：
 
-   ```cpp
-   #define AI_PROVIDER_2_NAME    "OpenClaw"
-   #define AI_PROVIDER_2_URL     "http://192.168.1.20:18789/v1/chat/completions"
-   #define AI_PROVIDER_2_KEY     "<你的 OPENCLAW_GATEWAY_TOKEN>"
-   #define AI_PROVIDER_2_MODEL   "openclaw/default"
-   ```
+```json5
+{
+  gateway: {
+    port: 18789,
+    bind: "lan",                              // ① 原为 "loopback"
+    auth: { mode: "token", token: "一个长随机串" },   // ② 非 loopback 强制鉴权
+  },
+}
+```
 
-   把 IP 换成运行 OpenClaw 那台电脑的**局域网 IP**（不是 127.0.0.1），
-   端口按你的 Gateway 实际端口填。`KEY` 会自动加上 `Bearer ` 前缀。
+① **是关键**——`bind: "loopback"` 只听 127.0.0.1，设备从局域网 IP 根本连不进来。
+② 非 loopback 绑定下 Gateway 会拒绝无鉴权启动。
 
-3. 上电后用 KEY2 菜单把 `Model` 切到 `OpenClaw` 即可。
+> ⚠️ `bind: "lan"` 后局域网内任何人都能碰到你的 Gateway：**必须设 token**，
+> 不要把 18789 端口转发到公网（已有大量暴露实例被扫到）。
 
-想指定会话（例如每台设备一个独立记忆），可在请求里带 `x-openclaw-session-key`
-头——当前固件未暴露该头，需要的话可自行在 `ai_client.cpp` 里加。
+#### 第 2 步：设备侧填两个值
 
-> 校验命令（在那台电脑上跑，先确认端点确实通了）：
-> `curl http://127.0.0.1:18789/v1/models -H 'Authorization: Bearer <TOKEN>'`
+`src/secrets.h`：
+
+```cpp
+#define OPENCLAW_GATEWAY_HOST   "192.168.1.20"   // Mac 的局域网 IP
+#define OPENCLAW_GATEWAY_TOKEN  "与上面 auth.token 一致"
+```
+
+留空 `OPENCLAW_GATEWAY_HOST` 即完全不启用，设备会走 HTTP 直连路径。
+
+#### 第 3 步：烧录，看串口
+
+正常会依次出现：
+
+```
+OpenClaw: connecting ws://192.168.1.20:18789
+OpenClaw: ws connected, waiting challenge
+OpenClaw: hello-ok (protocol 4)
+OpenClaw: ready
+```
+
+**首连接可能需要配对**：设备不是 loopback 客户端，Mac 上会出现待批准请求，
+跑一次 `openclaw pairing approve` 即可（之后凭 device token 自动连）。
+
+### 关于 TTS：目前还在设备端
+
+转写已经交给 Mac 了，但**播报仍用设备上的 Edge TTS**（微软在线服务）。
+想让播报也走 Mac（用 macOS 自带语音，音色更好且不依赖外网），需要在 Mac 上：
+
+```json5
+{ talk: { provider: "system", speechLocale: "zh-CN" } }
+```
+
+并让固件改调 `talk.speak` RPC 拿音频。**这一步尚未实现**——`talk.speak` 的
+返回格式（采样率、是否 base64）还没在实机上确认过，确认后再接。
 
 ### 关于「派活」这类耗时任务
 
-当前是**一问一答**的同步调用：说完话，设备等 AI 回完才播报。
-所以派给 OpenClaw 的任务最好能在十几秒内回完——`http.setTimeout` 是 15 秒，
-超了会报 `AI error` 回到待机。
-
-如果任务要跑几分钟（搜资料、改代码、跑流程），同步等就不合适了，需要
-**任务派发后先回一句「收到」，干完再主动通知设备**。那要求 Gateway 能主动
-推消息给设备——HTTP 做不到，得用 OpenClaw 的 **WebSocket** 协议
-（Gateway 原生就是 WS，双向，同样不需要 broker）。
-
-要不要往这个方向改，取决于你的任务有多长：
-
-| 任务时长 | 现状够不够 | 需要改什么 |
+| 连的是 | 任务多久能等 | 说明 |
 |---|---|---|
-| 十几秒内 | ✅ 现在就行 | 无 |
-| 几分钟，但要等结果 | ⚠️ 会超时 | 调大超时，或改 WS |
-| 派完就不管，干完再告诉我 | ❌ 做不到 | 改 WS，收 `event` 推送 |
+| OpenClaw（WS） | **最长 120 秒** | 服务端推送结果，不受单次 HTTP 超时限制 |
+| HTTP 直连 | 15 秒 | 超时报 `AI error` 回待机 |
+
+超过 120 秒的任务仍然会超时。若要「派完就不管、干完再通知」，需要
+`chat.send` 之外的异步任务通道——那是后续工作。
 
 ## 操作说明
 

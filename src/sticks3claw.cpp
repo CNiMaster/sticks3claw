@@ -18,6 +18,7 @@
 #include "display/mood_detector.h"
 #include "sensors/gyroscope.h"
 #include "communication/ai_client.h"
+#include "communication/openclaw_client.h"
 #include "input/button_handler.h"
 #include "system/power_manager.h"
 #include "stt/volcengine_stt.h"
@@ -75,6 +76,7 @@ OrientationManager* orientationManager;
 TextScroller* textScroller;
 MessageHistory* messageHistory;
 AIClient* aiClient;
+OpenClawClient* openclaw;
 ButtonHandler* recordButton;
 ButtonHandler* modeButton;
 VolcengineSTT* stt;
@@ -219,6 +221,25 @@ void setup() {
     }
     tts = new EdgeTTS(getCurrentVoiceId());
 
+    // OpenClaw：填了 Gateway 地址才启用。启用后 STT 与对话都走它，
+    // 设备端不再需要火山引擎凭证。连不上会自动回退到上面的 HTTP/火山路径。
+    openclaw = nullptr;
+    if (strlen(OPENCLAW_GATEWAY_HOST) > 0) {
+        openclaw = new OpenClawClient(OPENCLAW_GATEWAY_HOST, OPENCLAW_GATEWAY_PORT,
+                                      OPENCLAW_GATEWAY_TOKEN);
+        openclaw->onPhase([](const char* phase) {
+            // 让表情跟随会话阶段：录音→转写→思考→说话
+            if (faceRenderer) faceRenderer->setEmotion(phase);
+        });
+        if (openclaw->connect()) {
+            Serial.println("OpenClaw: ready");
+        } else {
+            Serial.println("OpenClaw: unavailable, will retry in loop");
+        }
+    } else {
+        Serial.println("OpenClaw: not configured (host empty)");
+    }
+
     powerManager = new PowerManager();
     powerManager->begin(display, wifiManager);
 
@@ -235,6 +256,20 @@ void loop() {
 
     powerManager->update();
     wifiManager->update();
+
+    // OpenClaw：日常驱动 WS，断线则按间隔重连。
+    // 连不上不影响使用——会自动回退到 HTTP/火山路径。
+    if (openclaw) {
+        if (openclaw->isConnected()) {
+            openclaw->update();
+        } else {
+            static unsigned long lastOcRetry = 0;
+            if (millis() - lastOcRetry >= OPENCLAW_RETRY_INTERVAL) {
+                lastOcRetry = millis();
+                if (WiFi.status() == WL_CONNECTED) openclaw->connect();
+            }
+        }
+    }
 
     recordButton->update();
     modeButton->update();
@@ -387,7 +422,14 @@ void stopRecording() {
     if (!audioBuffer) { returnToIdle(); return; }
     recorder->getCapturedData(audioBuffer, audioLength);
 
-    String text = stt->recognize(audioBuffer, audioLength);
+    String text;
+    if (openclaw && openclaw->isConnected()) {
+        // 首选：交给 OpenClaw Gateway 转写（Mac 本地识别，设备端不用配 STT 服务）
+        text = openclaw->transcribe(audioBuffer, audioLength);
+    } else {
+        // 回退：设备端直连火山引擎（需要 env/secrets.h 里配了火山凭证）
+        text = stt->recognize(audioBuffer, audioLength);
+    }
     free(audioBuffer);
 
     if (text.length() == 0) { textScroller->addLine("No speech", TFT_RED); returnToIdle(); return; }
@@ -411,7 +453,15 @@ void sendTextToAI(const char* text) {
         int historyCount = convHistory->getRecent(historyBuf, 50);
         AIProvider roleProvider = aiProviders[currentProvider];
         roleProvider.systemPrompt = rolePrompts[currentRole];
-        String reply = aiClient->chat(roleProvider, text, historyBuf, historyCount);
+
+        String reply;
+        if (openclaw && openclaw->isConnected()) {
+            // 首选：走 OpenClaw WS。服务端推送结果，长任务也能等到（上限 120 秒）。
+            reply = openclaw->ask(text, rolePrompts[currentRole]);
+        } else {
+            // 回退：HTTP 直连 Provider（15 秒超时，适合短任务）
+            reply = aiClient->chat(roleProvider, text, historyBuf, historyCount);
+        }
 
         if (reply.length() > 0) {
             String cleanReply;
